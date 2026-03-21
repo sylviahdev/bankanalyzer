@@ -1,43 +1,80 @@
-from flask import Flask, render_template, request, send_file
-from analyzer import analyze
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
+from analyzer import analyze  # your existing analyzer function
 import os
+import pandas as pd
 
+# Initialize app
 app = Flask(__name__)
+CORS(app)  # allow requests from any frontend
+
+# Folders
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-@app.route("/", methods=["GET", "POST"])
-def index():
-    summary_table = None
-    download_link = None
+# Sample file path
+SAMPLE_FILE = "sample_bank_statement.xlsx"
 
-    if request.method == "POST":
-        # Check if file was uploaded
+# Make sure sample file exists (generated previously)
+if not os.path.exists(SAMPLE_FILE):
+    sample_data = {
+        "Date": ["2026-03-01", "2026-03-05", "2026-03-10", "2026-03-15"],
+        "Description": ["Salary", "Groceries", "Electricity Bill", "Dining"],
+        "Amount": [5000, -150, -75, -60],
+        "Category": ["Income", "Food", "Utilities", "Food"]
+    }
+    pd.DataFrame(sample_data).to_excel(SAMPLE_FILE, index=False)
+
+# ------------------------------
+# API to analyze uploaded file
+# ------------------------------
+@app.route("/api/analyze", methods=["POST"])
+def analyze_file():
+    try:
         if "file" not in request.files:
-            return "No file part"
+            return jsonify({"error": "No file part"}), 400
         file = request.files["file"]
         if file.filename == "":
-            return "No file selected"
-        
-        # Save uploaded file
+            return jsonify({"error": "No file selected"}), 400
+
         filepath = os.path.join(UPLOAD_FOLDER, file.filename)
         file.save(filepath)
 
-        # Run analyzer
         summary = analyze(filepath)
+        summary.to_excel("summary.xlsx")
 
-        # The analyzer already saves summary.xlsx, we will serve it
-        download_link = "summary.xlsx"
+        return jsonify(summary.to_dict()), 200
 
-        # Convert summary to HTML table for browser display
-        summary_table = summary.to_frame().to_html(classes="table table-striped")
+    except Exception as e:
+        print("ERROR:", e)
+        return jsonify({"error": str(e)}), 500
 
-    return render_template("index.html", table=summary_table, download_link=download_link)
-
+# ------------------------------
+# Endpoint to download Excel
+# ------------------------------
 @app.route("/download")
 def download_file():
-    path = "summary.xlsx"
-    return send_file(path, as_attachment=True)
+    try:
+        if os.path.exists("summary.xlsx"):
+            return send_file("summary.xlsx", as_attachment=True)
+        else:
+            return jsonify({"error": "No summary file available"}), 404
+    except Exception as e:
+        print("ERROR:", e)
+        return jsonify({"error": str(e)}), 500
 
+# ------------------------------
+# Endpoint to download sample file
+# ------------------------------
+@app.route("/download-sample")
+def download_sample():
+    try:
+        return send_file(SAMPLE_FILE, as_attachment=True)
+    except Exception as e:
+        print("ERROR:", e)
+        return jsonify({"error": str(e)}), 500
+
+# ------------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
