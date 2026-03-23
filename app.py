@@ -1,80 +1,85 @@
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-from analyzer import analyze  # your existing analyzer function
 import os
 import pandas as pd
 
-# Initialize app
 app = Flask(__name__)
-CORS(app)  # allow requests from any frontend
+CORS(app)
 
-# Folders
-UPLOAD_FOLDER = "uploads"
+# Ensure uploads folder exists
+UPLOAD_FOLDER = os.path.join(os.getcwd(), "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Sample file path
-SAMPLE_FILE = "sample_bank_statement.xlsx"
+# Health check
+@app.route("/", methods=["GET"])
+def home():
+    return "API is running"
 
-# Make sure sample file exists (generated previously)
-if not os.path.exists(SAMPLE_FILE):
-    sample_data = {
-        "Date": ["2026-03-01", "2026-03-05", "2026-03-10", "2026-03-15"],
-        "Description": ["Salary", "Groceries", "Electricity Bill", "Dining"],
-        "Amount": [5000, -150, -75, -60],
-        "Category": ["Income", "Food", "Utilities", "Food"]
-    }
-    pd.DataFrame(sample_data).to_excel(SAMPLE_FILE, index=False)
+@app.route("/health", methods=["GET"])
+def health():
+    return "OK", 200
 
-# ------------------------------
-# API to analyze uploaded file
-# ------------------------------
+
+# -------- ANALYZE --------
 @app.route("/api/analyze", methods=["POST"])
 def analyze_file():
     try:
         if "file" not in request.files:
-            return jsonify({"error": "No file part"}), 400
+            return jsonify({"error": "No file uploaded"}), 400
+
         file = request.files["file"]
+
         if file.filename == "":
             return jsonify({"error": "No file selected"}), 400
 
         filepath = os.path.join(UPLOAD_FOLDER, file.filename)
         file.save(filepath)
 
-        summary = analyze(filepath)
-        summary.to_excel("summary.xlsx")
+        # Read Excel
+        df = pd.read_excel(filepath)
 
-        return jsonify(summary.to_dict()), 200
+        # Simple analysis (group by Category)
+        if "Category" not in df.columns or "Amount" not in df.columns:
+            return jsonify({"error": "Excel must contain Category and Amount columns"}), 400
+
+        summary = df.groupby("Category")["Amount"].sum()
+
+        # Save summary
+        summary_path = os.path.join(UPLOAD_FOLDER, "summary.xlsx")
+        summary.to_excel(summary_path)
+
+        return jsonify(summary.to_dict())
 
     except Exception as e:
         print("ERROR:", e)
         return jsonify({"error": str(e)}), 500
 
-# ------------------------------
-# Endpoint to download Excel
-# ------------------------------
-@app.route("/download")
-def download_file():
-    try:
-        if os.path.exists("summary.xlsx"):
-            return send_file("summary.xlsx", as_attachment=True)
-        else:
-            return jsonify({"error": "No summary file available"}), 404
-    except Exception as e:
-        print("ERROR:", e)
-        return jsonify({"error": str(e)}), 500
 
-# ------------------------------
-# Endpoint to download sample file
-# ------------------------------
-@app.route("/download-sample")
-def download_sample():
-    try:
-        return send_file(SAMPLE_FILE, as_attachment=True)
-    except Exception as e:
-        print("ERROR:", e)
-        return jsonify({"error": str(e)}), 500
+# -------- DOWNLOAD --------
+@app.route("/download", methods=["GET"])
+def download():
+    path = os.path.join(UPLOAD_FOLDER, "summary.xlsx")
+    if not os.path.exists(path):
+        return "No summary file", 404
+    return send_file(path, as_attachment=True)
 
-# ------------------------------
+
+# -------- SAMPLE --------
+@app.route("/download-sample", methods=["GET"])
+def sample():
+    sample_path = os.path.join(UPLOAD_FOLDER, "sample.xlsx")
+
+    if not os.path.exists(sample_path):
+        data = {
+            "Date": ["2026-01-01", "2026-01-02"],
+            "Description": ["Food", "Transport"],
+            "Amount": [-100, -50],
+            "Category": ["Food", "Transport"],
+        }
+        pd.DataFrame(data).to_excel(sample_path, index=False)
+
+    return send_file(sample_path, as_attachment=True)
+
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
