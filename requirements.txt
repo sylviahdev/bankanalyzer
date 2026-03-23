@@ -4,3 +4,7 @@ pandas
 openpyxl
 gunicorn
 PyJWT
+bcrypt
+psycopg2-binary
+SQLAlchemy
+Flask-SQLAlchemy
