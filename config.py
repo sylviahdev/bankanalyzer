@@ -2,13 +2,6 @@ import os
 from datetime import timedelta
 
 
-def _required(key: str) -> str:
-    value = os.environ.get(key)
-    if not value:
-        raise RuntimeError(f"Required environment variable {key} is not set")
-    return value
-
-
 def _normalize_db_url(url: str) -> str:
     if url.startswith("postgres://"):
         url = url.replace("postgres://", "postgresql://", 1)
@@ -24,7 +17,7 @@ class Config:
     TESTING = False
     LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
-    SECRET_KEY = _required("SECRET_KEY")
+    SECRET_KEY = os.environ.get("SECRET_KEY", "")
 
     _raw_db_url = os.environ.get("DATABASE_URL", "")
     SQLALCHEMY_DATABASE_URI = _normalize_db_url(_raw_db_url) if _raw_db_url else ""

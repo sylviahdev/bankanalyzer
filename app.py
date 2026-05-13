@@ -1,4 +1,10 @@
+if __name__ == "__main__":
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
 import logging
+import os
 import sys
 
 from flask import Flask, jsonify
@@ -28,6 +34,8 @@ def create_app(config_class: type = Config) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config_class)
 
+    if not app.config.get("SECRET_KEY"):
+        raise RuntimeError("SECRET_KEY is not configured")
     if not app.config.get("SQLALCHEMY_DATABASE_URI"):
         raise RuntimeError("DATABASE_URL is not configured")
 
@@ -85,3 +93,12 @@ def create_app(config_class: type = Config) -> Flask:
             app.logger.exception("db_init_failed")
 
     return app
+
+
+if __name__ == "__main__":
+    _app = create_app()
+    _app.run(
+        host=os.environ.get("HOST", "127.0.0.1"),
+        port=int(os.environ.get("PORT", "8000")),
+        debug=_app.config.get("DEBUG", False),
+    )
