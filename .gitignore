@@ -1,3 +1,40 @@
-summary.xlsx
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual envs
+venv/
+.venv/
+virtual/
+env/
+
+# Node (legacy — frontend not currently in this repo)
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Runtime
+uploads/
+/tmp/
+*.log
+
+# Generated artifacts
+summary.xlsx
+statement.csv

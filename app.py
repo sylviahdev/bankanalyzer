@@ -1,184 +1,87 @@
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
-from functools import wraps
-import os
-import datetime
-import bcrypt
-import jwt
 import logging
-import pandas as pd
+import sys
 
-# ----------------- CONFIG -----------------
-app = Flask(__name__)
-CORS(app)
+from flask import Flask, jsonify
+from flask_cors import CORS
+from flask_talisman import Talisman
 
-# Logging
-logging.basicConfig(level=logging.INFO)
+import analyze
+import auth
+from config import Config
+from errors import register_error_handlers
+from extensions import db, limiter
 
-# PostgreSQL config
-DB_USER = "sylvia"
-DB_PASSWORD = "sly"
-DB_NAME = "bankanalyzer"
-DB_HOST = "localhost"
 
-app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:5432/{DB_NAME}'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+def _configure_logging(app: Flask) -> None:
+    level = getattr(logging, str(app.config.get("LOG_LEVEL", "INFO")).upper(), logging.INFO)
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    )
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(level)
+    app.logger.setLevel(level)
 
-# JWT secret
-SECRET_KEY = "supersecretkey"
 
-# Upload folder
-UPLOAD_FOLDER = os.path.join(os.getcwd(), "uploads")
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+def create_app(config_class: type = Config) -> Flask:
+    app = Flask(__name__)
+    app.config.from_object(config_class)
 
-# Init DB
-db = SQLAlchemy(app)
+    if not app.config.get("SQLALCHEMY_DATABASE_URI"):
+        raise RuntimeError("DATABASE_URL is not configured")
 
-# ----------------- MODEL -----------------
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(50), unique=True, nullable=False)
-    password_hash = db.Column(db.LargeBinary, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    _configure_logging(app)
 
-# ----------------- AUTH -----------------
-def token_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = request.headers.get("Authorization")
+    db.init_app(app)
+    limiter.init_app(app)
 
-        if not token:
-            return jsonify({"error": "Token missing"}), 401
+    CORS(
+        app,
+        origins=app.config["CORS_ORIGINS"] or [],
+        supports_credentials=False,
+        max_age=600,
+        allow_headers=["Authorization", "Content-Type"],
+        methods=["GET", "POST", "OPTIONS"],
+    )
 
+    csp = {
+        "default-src": "'none'",
+        "frame-ancestors": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'",
+    }
+    Talisman(
+        app,
+        force_https=app.config["FORCE_HTTPS"],
+        strict_transport_security=True,
+        strict_transport_security_max_age=63072000,
+        strict_transport_security_include_subdomains=True,
+        content_security_policy=csp,
+        frame_options="DENY",
+        referrer_policy="no-referrer",
+        session_cookie_secure=app.config["FORCE_HTTPS"],
+    )
+
+    app.register_blueprint(auth.bp)
+    app.register_blueprint(analyze.bp)
+    register_error_handlers(app)
+
+    @app.get("/")
+    def index():
+        return jsonify({"name": "bankanalyzer", "status": "ok"})
+
+    @app.get("/healthz")
+    @limiter.exempt
+    def healthz():
+        return jsonify({"status": "ok"})
+
+    # Idempotent CREATE TABLE IF NOT EXISTS on startup.
+    # TODO: replace with Alembic migrations before onboarding real users.
+    with app.app_context():
         try:
-            jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-        except jwt.ExpiredSignatureError:
-            return jsonify({"error": "Token expired"}), 401
-        except jwt.InvalidTokenError:
-            return jsonify({"error": "Invalid token"}), 401
-
-        return f(*args, **kwargs)
-
-    return decorated
-
-# ----------------- ROUTES -----------------
-
-@app.route("/")
-def home():
-    return "API is running 🚀"
-
-# -------- REGISTER --------
-@app.route("/api/register", methods=["POST"])
-def register():
-    try:
-        data = request.get_json()
-        username = data.get("username")
-        password = data.get("password")
-
-        if not username or not password:
-            return jsonify({"error": "Username and password required"}), 400
-
-        if User.query.filter_by(username=username).first():
-            return jsonify({"error": "Username already exists"}), 400
-
-        hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
-
-        new_user = User(username=username, password_hash=hashed)
-        db.session.add(new_user)
-        db.session.commit()
-
-        logging.info(f"User registered: {username}")
-
-        return jsonify({"message": "User registered successfully"}), 201
-
-    except Exception as e:
-        logging.exception("REGISTER ERROR")
-        return jsonify({"error": str(e)}), 500
-
-# -------- LOGIN --------
-@app.route("/api/login", methods=["POST"])
-def login():
-    try:
-        data = request.get_json()
-        username = data.get("username")
-        password = data.get("password")
-
-        user = User.query.filter_by(username=username).first()
-
-        if user and bcrypt.checkpw(password.encode("utf-8"), user.password_hash):
-            token = jwt.encode({
-                "user": username,
-                "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=2)
-            }, SECRET_KEY, algorithm="HS256")
-
-            logging.info(f"User logged in: {username}")
-
-            return jsonify({"token": token})
-
-        return jsonify({"error": "Invalid credentials"}), 401
-
-    except Exception as e:
-        logging.exception("LOGIN ERROR")
-        return jsonify({"error": str(e)}), 500
-
-# -------- ANALYZE --------
-@app.route("/api/analyze", methods=["POST"])
-@token_required
-def analyze_file():
-    try:
-        if "file" not in request.files:
-            return jsonify({"error": "No file uploaded"}), 400
-
-        file = request.files["file"]
-
-        if file.filename == "":
-            return jsonify({"error": "No file selected"}), 400
-
-        filepath = os.path.join(UPLOAD_FOLDER, file.filename)
-        file.save(filepath)
-
-        df = pd.read_excel(filepath)
-
-        if "Category" not in df.columns or "Amount" not in df.columns:
-            return jsonify({"error": "Excel must contain Category and Amount columns"}), 400
-
-        summary = df.groupby("Category")["Amount"].sum()
-
-        summary_path = os.path.join(UPLOAD_FOLDER, "summary.xlsx")
-        summary.to_excel(summary_path)
-
-        logging.info("File analyzed successfully")
-
-        return jsonify(summary.to_dict())
-
-    except Exception as e:
-        logging.exception("ANALYZE ERROR")
-        return jsonify({"error": str(e)}), 500
-
-# -------- DOWNLOAD --------
-@app.route("/download", methods=["GET"])
-@token_required
-def download():
-    try:
-        path = os.path.join(UPLOAD_FOLDER, "summary.xlsx")
-
-        if not os.path.exists(path):
-            return jsonify({"error": "No summary file"}), 404
-
-        return send_file(path, as_attachment=True)
-
-    except Exception as e:
-        logging.exception("DOWNLOAD ERROR")
-        return jsonify({"error": str(e)}), 500
-
-# ----------------- RUN -----------------
-if __name__ == "__main__":
-    try:
-        with app.app_context():
             db.create_all()
-        logging.info("✅ Database connected successfully")
-    except Exception as e:
-        logging.exception("❌ Database connection failed")
+        except Exception:
+            app.logger.exception("db_init_failed")
 
-    app.run(host="0.0.0.0", port=10000)
+    return app

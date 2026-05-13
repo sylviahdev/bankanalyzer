@@ -1,6 +1,36 @@
 services:
   - type: web
-    name: bank-analyzer
-    env: python
+    name: bankanalyzer
+    runtime: python
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: gunicorn --workers 2 --threads 4 --timeout 60 --access-logfile - --error-logfile - wsgi:app
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.5
+      - key: FLASK_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bankanalyzer-db
+          property: connectionString
+      - key: CORS_ORIGINS
+        sync: false
+      - key: UPLOAD_FOLDER
+        value: /tmp/bankanalyzer-uploads
+      - key: MAX_UPLOAD_BYTES
+        value: "5242880"
+      - key: JWT_ACCESS_TTL_MINUTES
+        value: "30"
+
+databases:
+  - name: bankanalyzer-db
+    plan: free
+    databaseName: bankanalyzer
+    user: bankanalyzer
