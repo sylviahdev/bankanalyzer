@@ -1,13 +1,20 @@
+import datetime
 import re
 
 from flask import Blueprint, current_app, g, jsonify, request
 
 from extensions import db, limiter
-from models import RevokedToken, User
+from models import RefreshToken, RevokedToken, User
 from security import (
+    REFRESH_TYPE,
     auth_required,
     create_access_token,
+    create_refresh_token,
+    decode_token,
     hash_password,
+    revoke_all_refresh_tokens,
+    revoke_refresh_family,
+    session_is_current,
     verify_password,
 )
 
@@ -79,12 +86,63 @@ def login():
         return jsonify({"error": "Invalid credentials"}), 401
 
     token, exp, _ = create_access_token(user)
+    refresh, refresh_exp, _ = create_refresh_token(user)
+    db.session.commit()
     current_app.logger.info("user_login", extra={"user_id": user.id})
     return jsonify(
         {
             "access_token": token,
             "token_type": "Bearer",
             "expires_at": exp.isoformat(),
+            "refresh_token": refresh,
+            "refresh_expires_at": refresh_exp.isoformat(),
+        }
+    )
+
+
+@bp.post("/refresh")
+@limiter.limit("60 per hour")
+def refresh():
+    """Exchange a refresh token for a new access token and a successor refresh
+    token. The presented token is burned; presenting it twice is treated as
+    theft and revokes the whole family."""
+    data = request.get_json(silent=True) or {}
+    presented = data.get("refresh_token") or ""
+
+    payload, error = decode_token(presented, REFRESH_TYPE)
+    if payload is None:
+        return jsonify({"error": error}), 401
+
+    record = db.session.get(RefreshToken, payload.get("jti"))
+    if record is None:
+        # Correctly signed but unknown to us — treat as forged.
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if record.revoked or record.used_at is not None:
+        revoke_refresh_family(record.family_id)
+        db.session.commit()
+        current_app.logger.warning(
+            "refresh_token_reuse", extra={"user_id": record.user_id, "family": record.family_id}
+        )
+        return jsonify({"error": "Unauthorized"}), 401
+
+    user = db.session.get(User, record.user_id)
+    if user is None or not user.is_active or not session_is_current(user, payload):
+        return jsonify({"error": "Unauthorized"}), 401
+
+    record.used_at = datetime.datetime.now(datetime.timezone.utc)
+    access, exp, _ = create_access_token(user)
+    successor, refresh_exp, _ = create_refresh_token(user, family_id=record.family_id)
+    db.session.commit()
+
+    current_app.logger.info("token_refreshed", extra={"user_id": user.id})
+    return jsonify(
+        {
+            "access_token": access,
+            "token_type": "Bearer",
+            "expires_at": exp.isoformat(),
+            "refresh_token": successor,
+            "refresh_expires_at": refresh_exp.isoformat(),
         }
     )
 
@@ -94,6 +152,21 @@ def login():
 def logout():
     revoked = RevokedToken(jti=g.token_jti, user_id=g.user.id, expires_at=g.token_exp)
     db.session.merge(revoked)
+
+    # Kill the refresh family too, or the client could mint a fresh access
+    # token straight after logging out.
+    data = request.get_json(silent=True) or {}
+    presented = data.get("refresh_token") or ""
+    if presented:
+        payload, _ = decode_token(presented, REFRESH_TYPE)
+        record = db.session.get(RefreshToken, payload.get("jti")) if payload else None
+        if record is not None and record.user_id == g.user.id:
+            revoke_refresh_family(record.family_id)
+        else:
+            revoke_all_refresh_tokens(g.user.id)
+    else:
+        revoke_all_refresh_tokens(g.user.id)
+
     db.session.commit()
     current_app.logger.info("user_logout", extra={"user_id": g.user.id})
     return jsonify({"message": "Logged out"})

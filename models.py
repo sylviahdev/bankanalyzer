@@ -15,6 +15,10 @@ class User(db.Model):
     password_hash = db.Column(db.LargeBinary, nullable=False)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=_utcnow)
+    # Tokens issued before this instant are rejected. Bumped on password change
+    # so one action invalidates every outstanding session, including access
+    # tokens whose jti we never recorded. NULL means "no cutoff".
+    sessions_valid_from = db.Column(db.DateTime(timezone=True), nullable=True)
 
 
 class RevokedToken(db.Model):
@@ -24,6 +28,27 @@ class RevokedToken(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     revoked_at = db.Column(db.DateTime(timezone=True), nullable=False, default=_utcnow)
     expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+
+
+class RefreshToken(db.Model):
+    """A single issued refresh token, tracked so it can be rotated exactly once.
+
+    Rotation with reuse detection (OAuth 2.1 BCP): every refresh burns the
+    presented token and issues a successor in the same `family_id`. Presenting
+    an already-burned or revoked token means it leaked — the whole family is
+    revoked, which logs out both the attacker and the legitimate holder.
+    """
+
+    __tablename__ = "refresh_tokens"
+
+    jti = db.Column(db.String(36), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    family_id = db.Column(db.String(36), nullable=False, index=True)
+    issued_at = db.Column(db.DateTime(timezone=True), nullable=False, default=_utcnow)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False, index=True)
+    # Set the moment the token is exchanged; a second exchange is reuse.
+    used_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    revoked = db.Column(db.Boolean, nullable=False, default=False)
 
 
 class Statement(db.Model):

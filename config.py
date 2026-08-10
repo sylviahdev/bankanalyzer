@@ -26,6 +26,9 @@ class Config:
 
     JWT_ALGORITHM = "HS256"
     JWT_ACCESS_TTL = timedelta(minutes=int(os.environ.get("JWT_ACCESS_TTL_MINUTES", "30")))
+    # Refresh tokens rotate on every use, so the ceiling is how long a fully
+    # idle session may sit before the user has to sign in again.
+    JWT_REFRESH_TTL = timedelta(days=int(os.environ.get("JWT_REFRESH_TTL_DAYS", "14")))
     JWT_ISSUER = os.environ.get("JWT_ISSUER", "bankanalyzer")
     JWT_AUDIENCE = os.environ.get("JWT_AUDIENCE", "bankanalyzer-api")
 
