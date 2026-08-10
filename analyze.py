@@ -4,9 +4,11 @@ from pathlib import Path
 
 import pandas as pd
 from flask import Blueprint, current_app, g, jsonify, request, send_file
+from sqlalchemy import func
 
-from extensions import limiter
+from extensions import db, limiter
 from idempotency import idempotent
+from models import Statement, Transaction
 from security import auth_required
 
 bp = Blueprint("analyze", __name__, url_prefix="/api")
@@ -43,6 +45,68 @@ def _user_dir() -> Path:
     base = Path(current_app.config["UPLOAD_FOLDER"]) / f"user_{g.user.id}"
     base.mkdir(parents=True, exist_ok=True)
     return base
+
+
+def _resolve_column(df: pd.DataFrame, name: str) -> str | None:
+    """Find a column by exact name first, then case-insensitively."""
+    if name in df.columns:
+        return name
+    lowered = {str(c).strip().lower(): c for c in df.columns}
+    return lowered.get(name.lower())
+
+
+def _persist(df: pd.DataFrame, token: str, filename: str) -> Statement:
+    """Store the parsed rows so they can be queried later. Additive to the
+    original stateless behaviour: the JSON summary is unchanged."""
+    desc_col = _resolve_column(df, "Description")
+    date_col = _resolve_column(df, "Date")
+
+    dates = None
+    if date_col is not None:
+        dates = pd.to_datetime(df[date_col], errors="coerce").dt.date
+
+    amounts = df["Amount"]
+    income = float(amounts[amounts > 0].sum())
+    expenses = float(amounts[amounts < 0].sum())
+
+    valid_dates = [d for d in dates if pd.notna(d)] if dates is not None else []
+
+    statement = Statement(
+        user_id=g.user.id,
+        token=token,
+        filename=filename[:255],
+        row_count=int(len(df)),
+        total_income=round(income, 2),
+        total_expenses=round(expenses, 2),
+        period_start=min(valid_dates) if valid_dates else None,
+        period_end=max(valid_dates) if valid_dates else None,
+    )
+    db.session.add(statement)
+    db.session.flush()  # assign statement.id without committing yet
+
+    descriptions = df[desc_col].astype(str) if desc_col is not None else None
+    rows = []
+    for pos in range(len(df)):
+        amount = float(amounts.iloc[pos])
+        date = dates.iloc[pos] if dates is not None else None
+        rows.append(
+            {
+                "user_id": g.user.id,
+                "statement_id": statement.id,
+                "date": date if (date is not None and pd.notna(date)) else None,
+                "description": (
+                    descriptions.iloc[pos][:512] if descriptions is not None else ""
+                ),
+                "category": str(df["Category"].iloc[pos])[:64],
+                "amount": amount,
+                "kind": "income" if amount >= 0 else "expense",
+            }
+        )
+
+    if rows:
+        db.session.bulk_insert_mappings(Transaction, rows)
+    db.session.commit()
+    return statement
 
 
 def _read_dataframe(path: Path, ext: str) -> pd.DataFrame:
@@ -105,6 +169,15 @@ def analyze():
 
         summary_path = user_dir / f"summary_{token}.xlsx"
         summary.to_frame("Total").to_excel(summary_path)
+
+        try:
+            statement = _persist(df, token, file.filename)
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception(
+                "persist_failed", extra={"user_id": g.user.id, "token": token}
+            )
+            return jsonify({"error": "Could not store analysis"}), 500
     finally:
         src.unlink(missing_ok=True)
 
@@ -117,6 +190,7 @@ def analyze():
             "token": token,
             "summary": {k: float(v) for k, v in summary.to_dict().items()},
             "total_transactions": int(len(df)),
+            "statement": statement.to_dict(),
         }
     )
 
@@ -129,5 +203,21 @@ def download(token: str):
         return jsonify({"error": "Invalid token"}), 400
     path = _user_dir() / f"summary_{token}.xlsx"
     if not path.is_file():
-        return jsonify({"error": "Not found"}), 404
+        # Upload storage is ephemeral on Render, so rebuild the workbook from
+        # the persisted rows rather than 404-ing after a restart.
+        statement = Statement.query.filter_by(user_id=g.user.id, token=token).first()
+        if statement is None:
+            return jsonify({"error": "Not found"}), 404
+        totals = (
+            db.session.query(Transaction.category, func.sum(Transaction.amount))
+            .filter(Transaction.statement_id == statement.id)
+            .group_by(Transaction.category)
+            .all()
+        )
+        if not totals:
+            return jsonify({"error": "Not found"}), 404
+        frame = pd.DataFrame(
+            [{"Category": c, "Total": round(float(v), 2)} for c, v in totals]
+        ).set_index("Category")
+        frame.to_excel(path)
     return send_file(path, as_attachment=True, download_name="summary.xlsx")

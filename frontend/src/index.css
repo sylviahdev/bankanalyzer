@@ -1,0 +1,109 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens. The `series-*` slots are the validated categorical palette from
+ * the data-viz palette reference (adjacent-pair CVD ΔE 9.1, normal-vision 19.6
+ * against a #ffffff chart surface). Do not reorder or cycle these — the ordering
+ * is the colorblind-safety mechanism, not a cosmetic choice.
+ */
+@theme {
+  --color-canvas: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-hairline: rgba(11, 11, 11, 0.09);
+
+  --color-ink-primary: #0b0b0b;
+  --color-ink-secondary: #52514e;
+  --color-ink-muted: #898781;
+
+  --color-brand-50: #eff5fd;
+  --color-brand-100: #cde2fb;
+  --color-brand-200: #9ec5f4;
+  --color-brand-300: #6da7ec;
+  --color-brand-400: #3987e5;
+  --color-brand-500: #2a78d6;
+  --color-brand-600: #256abf;
+  --color-brand-700: #1c5cab;
+  --color-brand-800: #184f95;
+  --color-brand-900: #0d366b;
+
+  --color-series-1: #2a78d6;
+  --color-series-2: #eb6834;
+  --color-series-3: #1baf7a;
+  --color-series-4: #eda100;
+  --color-series-5: #e87ba4;
+  --color-series-6: #008300;
+  --color-series-7: #4a3aa7;
+  --color-series-8: #e34948;
+
+  --color-positive: #006300;
+  --color-negative: #d03b3b;
+  --color-warning: #fab219;
+
+  --color-grid: #e1e0d9;
+  --color-axis: #c3c2b7;
+
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  --radius-card: 0.875rem;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-canvas text-ink-primary font-sans antialiased;
+  }
+
+  /* Keyboard focus only — never suppress the ring outright. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-brand-500;
+  }
+
+  ::selection {
+    @apply bg-brand-100;
+  }
+}
+
+@layer utilities {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .animate-rise {
+    animation: rise 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .animate-fade {
+    animation: fade 0.3s ease-out both;
+  }
+
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  /* Respect users who ask for reduced motion. */
+  @media (prefers-reduced-motion: reduce) {
+    .animate-rise,
+    .animate-fade {
+      animation: none;
+    }
+  }
+}

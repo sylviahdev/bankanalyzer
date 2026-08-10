@@ -14,8 +14,9 @@ venv/
 virtual/
 env/
 
-# Node (legacy — frontend not currently in this repo)
+# Node / frontend build output
 node_modules/
+frontend/dist/
 
 # IDE
 .vscode/

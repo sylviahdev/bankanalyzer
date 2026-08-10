@@ -13,6 +13,7 @@ from flask_talisman import Talisman
 
 import analyze
 import auth
+import transactions
 from config import Config
 from errors import register_error_handlers
 from extensions import db, limiter
@@ -49,8 +50,8 @@ def create_app(config_class: type = Config) -> Flask:
         origins=app.config["CORS_ORIGINS"] or [],
         supports_credentials=False,
         max_age=600,
-        allow_headers=["Authorization", "Content-Type"],
-        methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
+        methods=["GET", "POST", "DELETE", "OPTIONS"],
     )
 
     csp = {
@@ -73,6 +74,7 @@ def create_app(config_class: type = Config) -> Flask:
 
     app.register_blueprint(auth.bp)
     app.register_blueprint(analyze.bp)
+    app.register_blueprint(transactions.bp)
     register_error_handlers(app)
 
     @app.get("/")
