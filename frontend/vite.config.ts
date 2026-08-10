@@ -10,5 +10,8 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // The backend pins CORS to an exact origin, so silently falling back to
+    // 5174 would break every request. Fail loudly instead.
+    strictPort: true,
   },
 })
