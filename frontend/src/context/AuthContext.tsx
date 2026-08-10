@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { authService, UNAUTHORIZED_EVENT } from '@/services'
-import { clearSession, millisecondsUntilExpiry, readToken } from '@/services/tokenStore'
+import {
+  clearSession,
+  hasSession,
+  millisecondsUntilSessionEnd,
+} from '@/services/tokenStore'
 import type { User } from '@/types/api'
 import { AuthContext, type AuthContextValue } from './authContext'
 
@@ -18,7 +22,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false
 
     async function restore() {
-      if (!readToken()) {
+      // A lapsed access token is fine here — the interceptor will refresh it.
+      if (!hasSession()) {
         if (!cancelled) setInitializing(false)
         return
       }
@@ -45,17 +50,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, dropSession)
   }, [dropSession])
 
-  // Tokens live 30 minutes. Sign the user out the moment theirs lapses rather
-  // than letting the next request fail.
+  // Access tokens are renewed transparently by the interceptor, so the session
+  // only truly ends when the refresh token's own ceiling is reached.
   useEffect(() => {
     if (!user) return
-    const remaining = millisecondsUntilExpiry()
+    const remaining = millisecondsUntilSessionEnd()
     if (remaining === null) return
     if (remaining <= 0) {
       dropSession()
       return
     }
-    const timer = window.setTimeout(dropSession, remaining)
+    // setTimeout overflows past ~24.8 days and would fire immediately; cap it
+    // and let the effect re-arm on the next render.
+    const timer = window.setTimeout(dropSession, Math.min(remaining, 2_147_483_647))
     return () => window.clearTimeout(timer)
   }, [user, dropSession])
 

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"node_modules|statement\\\\.csv|summary\\\\.xlsx|sample_bank|uploads/|instance/|\\\\.env$|package\")",
+      "Bash(pip show *)"
+    ]
+  }
+}

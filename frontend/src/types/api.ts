@@ -5,16 +5,27 @@
 
 export type TransactionKind = 'income' | 'expense'
 
-/** POST /api/auth/login */
-export interface LoginResponse {
+/** POST /api/auth/login and POST /api/auth/refresh return the same shape. */
+export interface TokenResponse {
   access_token: string
   token_type: string
   expires_at: string
+  /** Rotates on every refresh — the previous value is burned server-side. */
+  refresh_token: string
+  refresh_expires_at: string
 }
+
+export type LoginResponse = TokenResponse
 
 /** POST /api/auth/register — the backend always answers 202 with this body. */
 export interface RegisterResponse {
   message: string
+}
+
+/** POST /api/auth/password */
+export interface ChangePasswordRequest {
+  current_password: string
+  new_password: string
 }
 
 /** GET /api/auth/me */

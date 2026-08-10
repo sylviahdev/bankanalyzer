@@ -1,5 +1,5 @@
 import { api } from './client'
-import { clearSession, saveSession } from './tokenStore'
+import { clearSession, readRefreshToken, saveSession } from './tokenStore'
 import type { LoginResponse, RegisterResponse, User } from '@/types/api'
 
 export interface Credentials {
@@ -17,10 +17,10 @@ export async function register(credentials: Credentials): Promise<RegisterRespon
   return data
 }
 
-/** POST /api/auth/login — persists the bearer token on success. */
+/** POST /api/auth/login — persists the access and refresh tokens on success. */
 export async function login(credentials: Credentials): Promise<LoginResponse> {
   const { data } = await api.post<LoginResponse>('/api/auth/login', credentials)
-  saveSession(data.access_token, data.expires_at)
+  saveSession(data)
   return data
 }
 
@@ -31,12 +31,14 @@ export async function me(): Promise<User> {
 }
 
 /**
- * POST /api/auth/logout — revokes the jti server-side. The local session is
- * cleared regardless, so a network failure can never strand a signed-in UI.
+ * POST /api/auth/logout — revokes the access token's jti and the refresh family
+ * server-side. The local session is cleared regardless, so a network failure can
+ * never strand a signed-in UI.
  */
 export async function logout(): Promise<void> {
+  const refreshToken = readRefreshToken()
   try {
-    await api.post('/api/auth/logout')
+    await api.post('/api/auth/logout', refreshToken ? { refresh_token: refreshToken } : {})
   } finally {
     clearSession()
   }

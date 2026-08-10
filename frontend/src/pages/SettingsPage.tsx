@@ -9,7 +9,7 @@ import { LoadingBlock } from '@/components/ui/States'
 import { useAuth } from '@/hooks/useAuth'
 import { useAsync } from '@/hooks/useAsync'
 import { statementService } from '@/services'
-import { expiresAt } from '@/services/tokenStore'
+import { refreshExpiresAt } from '@/services/tokenStore'
 import { formatDateTime, formatNumber } from '@/utils/format'
 
 export function SettingsPage() {
@@ -26,7 +26,7 @@ export function SettingsPage() {
   )
   const { data: statements, loading } = useAsync(loadStatements, [])
 
-  const sessionExpiry = expiresAt()
+  const sessionExpiry = refreshExpiresAt()
 
   async function handleLogout() {
     setSigningOut(true)
@@ -121,11 +121,15 @@ export function SettingsPage() {
                   ],
                   [
                     'Session tokens',
-                    'Signed JWTs valid for 30 minutes, carrying issuer, audience and unique token identifiers.',
+                    'Signed JWTs valid for 30 minutes, renewed by a rotating refresh token so you are not signed out mid-task.',
+                  ],
+                  [
+                    'Theft detection',
+                    'Each renewal invalidates the previous refresh token. Reusing an old one is treated as theft and ends every session on this account.',
                   ],
                   [
                     'Sign-out revocation',
-                    'Signing out adds your token to a server-side denylist, so it stops working immediately.',
+                    'Signing out denylists your access token and revokes its refresh token, so both stop working immediately.',
                   ],
                 ].map(([title, body]) => (
                   <li key={title} className="flex gap-3">
@@ -188,7 +192,7 @@ export function SettingsPage() {
             <CardBody>
               <p className="text-ink-secondary text-sm">
                 {sessionExpiry
-                  ? `Your session expires at ${formatDateTime(sessionExpiry.toISOString())}. You will be signed out automatically.`
+                  ? `Access is renewed automatically while you are using the app. If left idle, this session ends on ${formatDateTime(sessionExpiry.toISOString())}.`
                   : 'Session details are unavailable.'}
               </p>
               <Button

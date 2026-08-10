@@ -3,12 +3,22 @@ import axios, {
   type AxiosInstance,
   type InternalAxiosRequestConfig,
 } from 'axios'
-import type { ApiErrorBody } from '@/types/api'
-import { clearSession, readToken } from './tokenStore'
+import type { ApiErrorBody, TokenResponse } from '@/types/api'
+import { clearSession, readRefreshToken, readToken, saveSession } from './tokenStore'
 
 const baseURL = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8000'
 
 export const api: AxiosInstance = axios.create({
+  baseURL,
+  timeout: 30_000,
+  headers: { Accept: 'application/json' },
+})
+
+/**
+ * A bare client used only to refresh. It deliberately has no interceptors, so a
+ * 401 from the refresh endpoint can never re-enter the refresh path.
+ */
+const refreshClient: AxiosInstance = axios.create({
   baseURL,
   timeout: 30_000,
   headers: { Accept: 'application/json' },
@@ -32,8 +42,13 @@ export class ApiError extends Error {
   }
 }
 
-/** Fired when the API rejects our token, so AuthContext can drop the session. */
+/** Fired when the session is gone for good, so AuthContext can tear it down. */
 export const UNAUTHORIZED_EVENT = 'bankanalyzer:unauthorized'
+
+/** Endpoints where a 401 is a legitimate answer, not an expired session. */
+const NO_REFRESH_PATHS = ['/api/auth/login', '/api/auth/refresh', '/api/auth/register']
+
+type RetriableConfig = InternalAxiosRequestConfig & { _retried?: boolean }
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = readToken()
@@ -42,6 +57,46 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   }
   return config
 })
+
+/*
+ * Single-flight refresh.
+ *
+ * When several requests are in the air and the access token lapses, they all
+ * come back 401 at once. Without this, each would fire its own refresh — and
+ * because refresh tokens rotate, the second one would present an already-burned
+ * token, which the server correctly reads as theft and kills the whole session.
+ * So the first 401 starts the refresh and every other 401 awaits that same
+ * promise.
+ */
+let inFlightRefresh: Promise<string> | null = null
+
+function refreshAccessToken(): Promise<string> {
+  if (inFlightRefresh) return inFlightRefresh
+
+  inFlightRefresh = (async () => {
+    const refreshToken = readRefreshToken()
+    if (!refreshToken) throw new Error('no refresh token')
+
+    const { data } = await refreshClient.post<TokenResponse>('/api/auth/refresh', {
+      refresh_token: refreshToken,
+    })
+
+    saveSession(data)
+    return data.access_token
+  })()
+
+  // Clear the slot however it settles, so a later 401 can start a fresh attempt.
+  void inFlightRefresh.catch(() => undefined).finally(() => {
+    inFlightRefresh = null
+  })
+
+  return inFlightRefresh
+}
+
+function endSession(): void {
+  clearSession()
+  window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT))
+}
 
 function messageFor(status: number, fromServer?: string): string {
   // The backend sends a useful `error` string for validation failures, so prefer
@@ -72,22 +127,47 @@ function messageFor(status: number, fromServer?: string): string {
   }
 }
 
+function toApiError(error: AxiosError<ApiErrorBody>): ApiError {
+  const status = error.response?.status ?? 0
+  const body = error.response?.data
+  const serverMessage = typeof body?.error === 'string' ? body.error : undefined
+  return new ApiError(messageFor(status, serverMessage), status, body?.correlation_id)
+}
+
 api.interceptors.response.use(
   (response) => response,
-  (error: AxiosError<ApiErrorBody>) => {
+  async (error: AxiosError<ApiErrorBody>) => {
     const status = error.response?.status ?? 0
-    const body = error.response?.data
-    const serverMessage = typeof body?.error === 'string' ? body.error : undefined
+    const config = error.config as RetriableConfig | undefined
 
-    if (status === 401) {
-      // The token is dead — never keep a rejected credential around.
-      clearSession()
-      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT))
+    const canRetry =
+      status === 401 &&
+      config !== undefined &&
+      // `_retried` is the loop guard: one refresh attempt per request, ever.
+      config._retried !== true &&
+      !NO_REFRESH_PATHS.some((path) => (config.url ?? '').includes(path))
+
+    if (canRetry) {
+      config._retried = true
+      try {
+        const token = await refreshAccessToken()
+        config.headers.set('Authorization', `Bearer ${token}`)
+        return await api.request(config)
+      } catch {
+        // Refresh failed or there was nothing to refresh with — the session is
+        // over. The reason is deliberately not surfaced: it is never actionable.
+        endSession()
+        return Promise.reject(
+          new ApiError('Your session has expired. Please sign in again.', 401),
+        )
+      }
     }
 
-    return Promise.reject(
-      new ApiError(messageFor(status, serverMessage), status, body?.correlation_id),
-    )
+    if (status === 401) {
+      endSession()
+    }
+
+    return Promise.reject(toApiError(error))
   },
 )
 
