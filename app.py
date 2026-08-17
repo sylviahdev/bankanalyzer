@@ -10,6 +10,7 @@ import sys
 from flask import Flask, jsonify
 from flask_cors import CORS
 from flask_talisman import Talisman
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import analyze
 import auth
@@ -42,6 +43,13 @@ def create_app(config_class: type = Config) -> Flask:
 
     _configure_logging(app)
 
+    # Koyeb (like most PaaS edges) terminates TLS and forwards plain HTTP with
+    # X-Forwarded-*. Without this, request.is_secure is always False — so
+    # Talisman would redirect every request to https in a loop — and
+    # request.remote_addr would be the proxy, putting every user in the same
+    # rate-limit bucket. One proxy hop.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+
     db.init_app(app)
     migrate.init_app(app, db)
     limiter.init_app(app)
@@ -61,7 +69,7 @@ def create_app(config_class: type = Config) -> Flask:
         "base-uri": "'none'",
         "form-action": "'none'",
     }
-    Talisman(
+    talisman = Talisman(
         app,
         force_https=app.config["FORCE_HTTPS"],
         strict_transport_security=True,
@@ -84,6 +92,10 @@ def create_app(config_class: type = Config) -> Flask:
 
     @app.get("/healthz")
     @limiter.exempt
+    # Platform health probes hit the container directly over plain HTTP with no
+    # X-Forwarded-Proto, so forcing https here would 301 the probe and fail the
+    # deploy. This endpoint exposes nothing, so exempting it costs nothing.
+    @talisman(force_https=False)
     def healthz():
         return jsonify({"status": "ok"})
 
