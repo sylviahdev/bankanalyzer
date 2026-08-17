@@ -22,10 +22,9 @@ export interface RegisterResponse {
   message: string
 }
 
-/** POST /api/auth/password */
-export interface ChangePasswordRequest {
-  current_password: string
-  new_password: string
+/** POST /api/auth/password, DELETE /api/auth/account, POST /api/auth/logout */
+export interface MessageResponse {
+  message: string
 }
 
 /** GET /api/auth/me */

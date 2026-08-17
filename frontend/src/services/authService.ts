@@ -1,6 +1,6 @@
 import { api } from './client'
 import { clearSession, readRefreshToken, saveSession } from './tokenStore'
-import type { LoginResponse, RegisterResponse, User } from '@/types/api'
+import type { LoginResponse, MessageResponse, RegisterResponse, User } from '@/types/api'
 
 export interface Credentials {
   username: string
@@ -42,4 +42,33 @@ export async function logout(): Promise<void> {
   } finally {
     clearSession()
   }
+}
+
+/**
+ * POST /api/auth/password — the server invalidates every session on success
+ * (including this one), so the local tokens are cleared and the caller must
+ * send the user back to sign in.
+ */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<MessageResponse> {
+  const { data } = await api.post<MessageResponse>('/api/auth/password', {
+    current_password: currentPassword,
+    new_password: newPassword,
+  })
+  clearSession()
+  return data
+}
+
+/**
+ * DELETE /api/auth/account — permanent. The password is the confirmation, so a
+ * stolen access token alone cannot destroy an account.
+ */
+export async function deleteAccount(password: string): Promise<MessageResponse> {
+  const { data } = await api.delete<MessageResponse>('/api/auth/account', {
+    data: { password },
+  })
+  clearSession()
+  return data
 }
