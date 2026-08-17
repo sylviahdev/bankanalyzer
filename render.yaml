@@ -4,6 +4,8 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
+    # Schema is applied as a release step, never at app startup.
+    preDeployCommand: flask db upgrade
     startCommand: gunicorn --workers 2 --threads 4 --timeout 60 --access-logfile - --error-logfile - wsgi:app
     healthCheckPath: /healthz
     autoDeploy: true
@@ -28,6 +30,10 @@ services:
         value: "5242880"
       - key: JWT_ACCESS_TTL_MINUTES
         value: "30"
+      - key: JWT_REFRESH_TTL_DAYS
+        value: "14"
+      - key: FLASK_APP
+        value: wsgi.py
 
 databases:
   - name: bankanalyzer-db

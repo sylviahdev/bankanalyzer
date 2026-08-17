@@ -30,6 +30,7 @@ Frontend: React 19 · Vite · TypeScript · Tailwind CSS 4 · React Router · Ax
 ├── analyze.py          # /api/{analyze,download/<token>}
 ├── transactions.py     # /api/{statements,transactions,categories,analytics/summary}
 ├── errors.py           # JSON error handlers
+├── migrations/         # Alembic revisions — the schema's source of truth
 ├── requirements.txt
 ├── render.yaml         # Render service + Postgres
 ├── Procfile
@@ -90,6 +91,47 @@ Run tests:
 pip install pytest
 pytest
 ```
+
+## Database migrations
+
+The schema is owned by Alembic (via Flask-Migrate) and lives in `migrations/`.
+Nothing is created at application startup — several gunicorn workers booting at
+once must never race to mutate the schema of a financial database.
+
+```bash
+export FLASK_APP=wsgi.py          # plus SECRET_KEY and DATABASE_URL
+
+flask db upgrade                  # apply migrations (safe to re-run)
+flask db current                  # which revision is applied
+flask db history                  # list revisions
+flask db downgrade                # revert one revision (destructive — dev only)
+```
+
+After changing a model, generate a revision and **read it before committing** —
+autogenerate does not detect everything (renames, server defaults, some
+constraint changes):
+
+```bash
+flask db migrate -m "describe the change"
+flask db upgrade
+```
+
+`flask db upgrade` must run as a release step before new application code
+starts. On Render, set it as the pre-deploy command:
+
+```
+pip install -r requirements.txt && flask db upgrade
+```
+
+### Adopting migrations on an existing database
+
+Earlier versions created tables with `db.create_all()`. The initial revision
+guards every step with an inspector check, so running `flask db upgrade` against
+a database that already has those tables creates only what is missing and leaves
+existing rows untouched. There is no need to `stamp`, and no data is destroyed.
+
+Verified against a fresh database, a database created by the old `create_all()`
+path, one predating the `refresh_tokens` table, and a repeat run (no-op).
 
 ## Frontend
 
