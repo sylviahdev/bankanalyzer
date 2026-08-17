@@ -48,7 +48,11 @@ export const UNAUTHORIZED_EVENT = 'bankanalyzer:unauthorized'
 /** Endpoints where a 401 is a legitimate answer, not an expired session. */
 const NO_REFRESH_PATHS = ['/api/auth/login', '/api/auth/refresh', '/api/auth/register']
 
-type RetriableConfig = InternalAxiosRequestConfig & { _retried?: boolean }
+type RetriableConfig = InternalAxiosRequestConfig & {
+  _retried?: boolean
+  /** Set once this request has been retried with a freshly minted token. */
+  _refreshed?: boolean
+}
 
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = readToken()
@@ -149,10 +153,10 @@ api.interceptors.response.use(
 
     if (canRetry) {
       config._retried = true
+
+      let token: string
       try {
-        const token = await refreshAccessToken()
-        config.headers.set('Authorization', `Bearer ${token}`)
-        return await api.request(config)
+        token = await refreshAccessToken()
       } catch {
         // Refresh failed or there was nothing to refresh with — the session is
         // over. The reason is deliberately not surfaced: it is never actionable.
@@ -161,9 +165,18 @@ api.interceptors.response.use(
           new ApiError('Your session has expired. Please sign in again.', 401),
         )
       }
+
+      config._refreshed = true
+      config.headers.set('Authorization', `Bearer ${token}`)
+      // Let the retry's own failure flow through this interceptor normally.
+      return api.request(config)
     }
 
-    if (status === 401) {
+    // A 401 on a request that just carried a freshly minted token is not a
+    // session problem — it is the endpoint's real answer. /api/auth/password
+    // and /api/auth/account return 401 when the submitted password is wrong,
+    // and signing the user out there would be both wrong and alarming.
+    if (status === 401 && config?._refreshed !== true) {
       endSession()
     }
 

@@ -1,14 +1,16 @@
 import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CalendarDays, Info, KeyRound, LogOut, ShieldCheck, User } from 'lucide-react'
+import { CalendarDays, KeyRound, LogOut, ShieldCheck, Trash2, User } from 'lucide-react'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Alert } from '@/components/ui/Alert'
 import { LoadingBlock } from '@/components/ui/States'
+import { ChangePasswordForm } from '@/components/settings/ChangePasswordForm'
+import { DeleteAccountDialog } from '@/components/settings/DeleteAccountDialog'
 import { useAuth } from '@/hooks/useAuth'
 import { useAsync } from '@/hooks/useAsync'
-import { statementService } from '@/services'
+import { statementService, UNAUTHORIZED_EVENT } from '@/services'
 import { refreshExpiresAt } from '@/services/tokenStore'
 import { formatDateTime, formatNumber } from '@/utils/format'
 
@@ -16,6 +18,7 @@ export function SettingsPage() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [signingOut, setSigningOut] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
 
   const loadStatements = useCallback(
     (signal: AbortSignal) => {
@@ -145,16 +148,13 @@ export function SettingsPage() {
                 ))}
               </ul>
 
-              {/* Honest about what the API does not offer, rather than shipping a
-                  dead "Change password" button. */}
-              <div className="border-hairline mt-5 flex gap-2.5 border-t pt-4">
-                <Info className="text-ink-muted mt-0.5 size-4 shrink-0" aria-hidden="true" />
-                <p className="text-ink-secondary text-sm">
-                  Changing your password and account deletion are not yet available — the
-                  API does not expose endpoints for them. Uploaded statements can be
-                  deleted individually from the{' '}
-                  <span className="font-medium">Upload Statement</span> page.
-                </p>
+              <div className="border-hairline mt-6 border-t pt-6">
+                <h3 className="text-ink-primary mb-4 text-sm font-semibold">
+                  Change password
+                </h3>
+                <ChangePasswordForm
+                  onChanged={() => navigate('/login', { replace: true })}
+                />
               </div>
             </CardBody>
           </Card>
@@ -207,8 +207,47 @@ export function SettingsPage() {
               </Button>
             </CardBody>
           </Card>
+
+          {/* Destructive actions are visually separated and never one click away. */}
+          <Card className="ring-[#f4c4c3]">
+            <CardHeader
+              title="Danger zone"
+              description="Permanent actions that cannot be undone."
+            />
+            <CardBody>
+              <p className="text-ink-secondary text-sm">
+                Deleting your account removes your profile, every uploaded statement and
+                every transaction parsed from them. This is immediate and irreversible.
+              </p>
+              <Button
+                variant="danger"
+                fullWidth
+                className="mt-4"
+                onClick={() => setDeleteOpen(true)}
+                icon={<Trash2 className="size-4" aria-hidden="true" />}
+              >
+                Delete account
+              </Button>
+            </CardBody>
+          </Card>
         </div>
       </div>
+
+      <DeleteAccountDialog
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        username={user?.username ?? ''}
+        statementCount={statements?.length ?? 0}
+        transactionCount={(statements ?? []).reduce((sum, s) => sum + s.row_count, 0)}
+        onDeleted={() => {
+          setDeleteOpen(false)
+          // The account is gone and the service already cleared storage, so
+          // calling the logout endpoint would only 401. Tear the session down
+          // locally instead — AuthContext listens for this.
+          window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT))
+          navigate('/', { replace: true })
+        }}
+      />
     </>
   )
 }
