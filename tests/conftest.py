@@ -13,9 +13,16 @@ sys.path.insert(0, ROOT)
 def app():
     from app import create_app
     from config import TestConfig
+    from extensions import db
 
     application = create_app(TestConfig)
-    yield application
+    # Production schema is owned by Alembic; the suite builds it directly from
+    # the models so tests stay fast and independent of migration history.
+    with application.app_context():
+        db.create_all()
+        yield application
+        db.session.remove()
+        db.drop_all()
 
 
 @pytest.fixture

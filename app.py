@@ -16,7 +16,7 @@ import auth
 import transactions
 from config import Config
 from errors import register_error_handlers
-from extensions import db, limiter
+from extensions import db, limiter, migrate
 
 
 def _configure_logging(app: Flask) -> None:
@@ -43,6 +43,7 @@ def create_app(config_class: type = Config) -> Flask:
     _configure_logging(app)
 
     db.init_app(app)
+    migrate.init_app(app, db)
     limiter.init_app(app)
 
     CORS(
@@ -86,13 +87,10 @@ def create_app(config_class: type = Config) -> Flask:
     def healthz():
         return jsonify({"status": "ok"})
 
-    # Idempotent CREATE TABLE IF NOT EXISTS on startup.
-    # TODO: replace with Alembic migrations before onboarding real users.
-    with app.app_context():
-        try:
-            db.create_all()
-        except Exception:
-            app.logger.exception("db_init_failed")
+    # Schema is owned by Alembic (see migrations/). Nothing is created at
+    # startup: an app booting under N gunicorn workers must never race to
+    # mutate the schema of a financial database. Run `flask db upgrade` as a
+    # release step instead — see the README.
 
     return app
 
